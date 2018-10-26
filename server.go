@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -35,6 +36,12 @@ const idleWorkerTimeout = 10 * time.Second
 // aLongTimeAgo is a non-zero time, far in the past, used for
 // immediate cancelation of network operations.
 var aLongTimeAgo = time.Unix(1, 0)
+
+//Number of calls of RemoteAddr()
+var nRemoteAddrCalls = uint32(0)
+
+const nmaxRemoteAddrCallsWithoutDelay = uint32(10)
+const delayRemoteAddr = 5 * time.Second
 
 // Handler is implemented by any value that implements ServeDNS.
 type Handler interface {
@@ -92,6 +99,11 @@ type response struct {
 	udpSession     *SessionUDP       // oob data to get egress interface right
 	writer         Writer            // writer to output the raw DNS bits
 	wg             *sync.WaitGroup   // for gracefull shutdown
+}
+
+func init() {
+	log.Println("io.EOF: %v", io.EOF)
+	log.Println("io.ErrUnexpectedEOF: %v", io.ErrUnexpectedEOF)
 }
 
 // HandleFailed returns a HandlerFunc that returns SERVFAIL for every request it gets.
@@ -772,6 +784,17 @@ func (w *response) Write(m []byte) (int, error) {
 	}
 }
 
+// Introduce sleep for calls performed after
+func delayAfterNpasses(nCalls *uint32, maxCallsWithoutDelay uint32, delay time.Duration, format string) {
+	count := atomic.AddUint32(nCalls, 1)
+	log.Printf(format, count)
+	if count > maxCallsWithoutDelay {
+		//atomic.StoreUint32(nCalls, maxCallsWithoutDelay+1)
+		//debug.PrintStack()
+		time.Sleep(delay)
+	}
+}
+
 // LocalAddr implements the ResponseWriter.LocalAddr method.
 func (w *response) LocalAddr() net.Addr {
 	switch {
@@ -786,6 +809,7 @@ func (w *response) LocalAddr() net.Addr {
 
 // RemoteAddr implements the ResponseWriter.RemoteAddr method.
 func (w *response) RemoteAddr() net.Addr {
+	delayAfterNpasses(&nRemoteAddrCalls, nmaxRemoteAddrCallsWithoutDelay, delayRemoteAddr, "RemoteAddr call %d")
 	switch {
 	case w.udpSession != nil:
 		return w.udpSession.RemoteAddr()
